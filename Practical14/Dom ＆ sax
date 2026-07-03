@@ -1,0 +1,228 @@
+import xml.dom.minidom as dom
+import xml.sax as sax
+from datetime import datetime
+import os
+
+def parse_with_dom(xml_file):
+    start_time = datetime.now()
+    
+    tree = dom.parse(xml_file)
+    terms = tree.getElementsByTagName('term')
+    
+    id_to_parents = {}
+    
+    for term in terms:
+        id_node = term.getElementsByTagName('id')
+        if id_node:
+            go_id = id_node[0].firstChild.nodeValue.strip()
+        else:
+            continue
+        
+        ns_node = term.getElementsByTagName('namespace')
+        if ns_node:
+            namespace = ns_node[0].firstChild.nodeValue.strip()
+        else:
+            namespace = 'unknown'
+        
+        is_a_nodes = term.getElementsByTagName('is_a')
+        parents = []
+        for node in is_a_nodes:
+            if node.firstChild:
+                parents.append(node.firstChild.nodeValue.strip())
+        
+        id_to_parents[go_id] = {
+            'namespace': namespace,
+            'parents': parents
+        }
+    
+    def calculate_depth(go_id, memo=None):
+        if memo is None:
+            memo = {}
+        
+        if go_id in memo:
+            return memo[go_id]
+        
+        if go_id not in id_to_parents or not id_to_parents[go_id]['parents']:
+            memo[go_id] = 0
+            return 0
+        
+        parents = id_to_parents[go_id]['parents']
+        max_parent_depth = 0
+        for parent in parents:
+            parent_depth = calculate_depth(parent, memo)
+            if parent_depth > max_parent_depth:
+                max_parent_depth = parent_depth
+        
+        memo[go_id] = max_parent_depth + 1
+        return memo[go_id]
+    
+    ontologies = ['molecular_function', 'biological_process', 'cellular_component']
+    results = {}
+    
+    for ontology in ontologies:
+        max_depth = -1
+        deepest_term = None
+        
+        for go_id, info in id_to_parents.items():
+            if info['namespace'] == ontology:
+                depth = calculate_depth(go_id)
+                if depth > max_depth:
+                    max_depth = depth
+                    deepest_term = go_id
+        
+        results[ontology] = (deepest_term, max_depth)
+    
+    end_time = datetime.now()
+    elapsed = (end_time - start_time).total_seconds()
+    
+    return results, elapsed
+
+class GOHandlerSimple(sax.ContentHandler):
+    def __init__(self):
+        self.id_to_parents = {}
+        self.current_id = None
+        self.current_namespace = None
+        self.current_parents = []
+        self.current_tag = ""
+        self.current_content = ""
+        self.in_def = False
+        self.in_name = False
+    
+    def startElement(self, name, attrs):
+        self.current_tag = name
+        self.current_content = ""
+        
+        if name == 'term':
+            self.current_id = None
+            self.current_namespace = None
+            self.current_parents = []
+            self.in_def = False
+            self.in_name = False
+        elif name == 'def':
+            self.in_def = True
+        elif name == 'name':
+            self.in_name = True
+    
+    def endElement(self, name):
+        content = self.current_content.strip()
+        
+        if name == 'id':
+            self.current_id = content
+        elif name == 'namespace':
+            self.current_namespace = content
+        elif name == 'is_a':
+            if content:
+                self.current_parents.append(content)
+        elif name == 'name':
+            self.in_name = False
+        elif name == 'def':
+            self.in_def = False
+        elif name == 'term':
+            if self.current_id and self.current_namespace is not None:
+                self.id_to_parents[self.current_id] = {
+                    'namespace': self.current_namespace,
+                    'parents': self.current_parents
+                }
+        
+        self.current_content = ""
+    
+    def characters(self, content):
+        self.current_content += content
+
+def parse_with_sax(xml_file):
+    start_time = datetime.now()
+    
+    handler = GOHandlerSimple()
+    parser = sax.make_parser()
+    parser.setContentHandler(handler)
+    parser.parse(xml_file)
+    
+    id_to_parents = handler.id_to_parents
+    
+    def calculate_depth(go_id, memo=None):
+        if memo is None:
+            memo = {}
+        
+        if go_id in memo:
+            return memo[go_id]
+        
+        if go_id not in id_to_parents or not id_to_parents[go_id]['parents']:
+            memo[go_id] = 0
+            return 0
+        
+        parents = id_to_parents[go_id]['parents']
+        max_parent_depth = 0
+        for parent in parents:
+            parent_depth = calculate_depth(parent, memo)
+            if parent_depth > max_parent_depth:
+                max_parent_depth = parent_depth
+        
+        memo[go_id] = max_parent_depth + 1
+        return memo[go_id]
+    
+    ontologies = ['molecular_function', 'biological_process', 'cellular_component']
+    results = {}
+    
+    for ontology in ontologies:
+        max_depth = -1
+        deepest_term = None
+        
+        for go_id, info in id_to_parents.items():
+            if info['namespace'] == ontology:
+                depth = calculate_depth(go_id)
+                if depth > max_depth:
+                    max_depth = depth
+                    deepest_term = go_id
+        
+        results[ontology] = (deepest_term, max_depth)
+    
+    end_time = datetime.now()
+    elapsed = (end_time - start_time).total_seconds()
+    
+    return results, elapsed
+
+def main():
+    xml_file = 'go_obo.xml'
+    
+    if not os.path.exists(xml_file):
+        print(f"Error: File '{xml_file}' not found. Please make sure the file is in the current directory.")
+        return
+    
+    print("=" * 70)
+    print("GO OBO XML Parser - Finding Deepest Terms by Ontology")
+    print("=" * 70)
+    
+    print("\n[DOM Parser Results]")
+    dom_results, dom_time = parse_with_dom(xml_file)
+    
+    for ontology in ['molecular_function', 'biological_process', 'cellular_component']:
+        term_id, depth = dom_results[ontology]
+        ontology_display = ontology.replace('_', ' ').title()
+        print(f"  {ontology_display}: {term_id} (depth: {depth})")
+    
+    print(f"\n  Time taken for DOM: {dom_time:.4f} seconds")
+    
+    print("\n[SAX Parser Results]")
+    sax_results, sax_time = parse_with_sax(xml_file)
+    
+    for ontology in ['molecular_function', 'biological_process', 'cellular_component']:
+        term_id, depth = sax_results[ontology]
+        ontology_display = ontology.replace('_', ' ').title()
+        print(f"  {ontology_display}: {term_id} (depth: {depth})")
+    
+    print(f"\n  Time taken for SAX: {sax_time:.4f} seconds")
+    
+    print("\n" + "=" * 70)
+    print("Performance Comparison:")
+    
+    if dom_time < sax_time:
+        print("DOM ran faster")
+    elif sax_time < dom_time:
+        print("SAX ran faster")
+    else:
+        print("Both ran at the same speed")
+    
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()
